@@ -1,91 +1,147 @@
-from django.shortcuts import render
-
-# Create your views here.
-import json
-import requests
-from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from .models import Customer
-from datetime import datetime
-from django.core.mail import send_mail
+from django.http import JsonResponse
+import json
+from .zendesk.zendesk_client import (
+    create_zendesk_ticket,
+    close_zendesk_ticket,
+    parse_alarm_timestamp
+)
+from .models import SiteOutage, Customer
+from django.db import IntegrityError, transaction
+import traceback
 
-ZENDESK_API_URL = "https://<your-subdomain>.zendesk.com/api/v2/tickets.json"
-ZENDESK_API_TOKEN = "<your-zendesk-api-token>"
-ZENDESK_USER = "<your-email>/token" 
 
 @csrf_exempt
 def receive_alarm(request):
-    if request.method == 'POST':
-        try:
-            data = json.loads(request.body)
-            customer_id = data.get("customer_id")  # get customer_id from API data
-            site_name = data.get("objectFullName")
-            alarm_time = datetime.fromtimestamp(data.get("lastTimeDetected") / 1000)
 
-            # Get customer by customer_id
-            customer = Customer.objects.filter(customer_id=customer_id).first()
+    if request.method != "POST":
+        return JsonResponse({"error": "Invalid method"}, status=405)
 
-            if customer:
-                subject = f"[Test] Outage at Site: {site_name}"
-                body = (
-                    f"Dear Valued Customer,\n\n"
-                    f"Ticket Status: Open\n\n"
-                    f"Name of NE/Circuit/Link affected: '{site_name}'\n\n"
-                    f"Date and Time Reported: {alarm_time}.\n\n"
-                    f"Client Services Affected (Yes/No): Yes\n\n"
-                    f"Fault Priority: {data.get('severity')}\n\n"
-                    f"Description: Site is not reachable\n\n"
-                    f"Kindly restore power at site and revert.\n\n\n"
-                    f"Regards,\nNOC Team"
-                )
+    try:
+        alarm = json.loads(request.body)
+        action = alarm.get("action")
 
-                for email_obj in customer.emails.all():
-                    # send_to_zendesk(email_obj.email, subject, body)
-                    send_test_email(email_obj.email, subject, body)
+        # ================= OPEN =================
+        if action == "OPEN":
 
-                return JsonResponse({"message": "Notification sent"}, status=200)
+            if alarm.get("severity") != "Critical":
+                return JsonResponse({"status": "ignored"})
+
+            customer = Customer.objects.filter(
+                customer_id=alarm.get("customer_id")
+            ).first()
+
+            if not customer:
+                return JsonResponse({"status": "ignored", "message": "Customer not found"})
+
+            customer_emails = list(
+                customer.emails.values_list("email", flat=True)
+            )
+
+            alarm_time = parse_alarm_timestamp(alarm)
+            site_name = alarm.get("objectFullName")
+
+            try:
+                with transaction.atomic():
+
+                    # 🔧 CHANGED: rely on DB constraint, not pre-filter
+                    outage_record, created = SiteOutage.objects.get_or_create(
+                        site_name=site_name,
+                        is_active=True,
+                        defaults={
+                            "alarm_time": alarm_time,
+                            "notification_sent": True
+                        }
+                    )
+
+                    if not created:
+                        # 🔧 CHANGED: duplicate OPEN safely ignored
+                        return JsonResponse({
+                            "status": "duplicate_open_ignored",
+                            "ticket_id": outage_record.zendesk_ticket_id
+                        })
+
+                    # 🆕 Zendesk ticket created ONLY once
+                    ticket_id = create_zendesk_ticket(alarm, customer_emails)
+
+                    outage_record.zendesk_ticket_id = ticket_id
+                    outage_record.save(update_fields=["zendesk_ticket_id"])
+
+                    return JsonResponse({
+                        "status": "ticket_created",
+                        "ticket_id": ticket_id
+                    })
+
+            except IntegrityError:
+                # 🆕 Handles rare race-condition collisions
+                existing = SiteOutage.objects.filter(
+                    site_name=site_name,
+                    is_active=True
+                ).first()
+
+                return JsonResponse({
+                    "status": "duplicate_open_ignored",
+                    "ticket_id": existing.zendesk_ticket_id if existing else None
+                })
+
+        # ================= CLOSE =================
+        elif action == "CLOSE":
+
+            site_name = alarm.get("objectFullName")
+
+            outage = SiteOutage.objects.filter(
+                site_name=site_name,
+                is_active=True
+            ).first()
+
+            if not outage:
+                return JsonResponse({"status": "no_active_outage"})
+
+            # Attempt to close the Zendesk ticket
+            ticket_closed = close_zendesk_ticket(
+                outage.zendesk_ticket_id,
+                alarm,
+                outage.alarm_time
+            )
+
+            # Only mark outage inactive if the ticket was successfully closed
+            if ticket_closed:  # ticket_closed should be True if ticket actually closed
+                outage.is_active = False
+                outage.save(update_fields=["is_active"])
+                return JsonResponse({"status": "closed"})
             else:
-                return JsonResponse({"error": "Customer not found"}, status=404)
+                return JsonResponse({"status": "ticket_not_closed"})
 
-        except Exception as e:
-            return JsonResponse({"error": str(e)}, status=500)
+        #return JsonResponse({"status": "ignored"})
 
-    return JsonResponse({"error": "Invalid method"}, status=405)
+        '''elif action == "CLOSE":
 
+            site_name = alarm.get("objectFullName")
 
-def send_test_email(recipient_email, subject, message):
-    send_mail(
-        subject,
-        message,
-        "llubowa@csquared.com",
-        [recipient_email],       # To email (you can hardcode yours here)
-        fail_silently=False,
-    )
+            outage = SiteOutage.objects.filter(
+                site_name=site_name,
+                is_active=True
+            ).first()
 
-def send_to_zendesk(recipient_email, subject, message):
-    payload = {
-        "ticket": {
-            "subject": subject,
-            "comment": {
-                "body": message
-            },
-            "priority": "urgent",
-            "requester": {
-                "name": "NFM-P Auto Alarm",
-                "email": recipient_email
-            }
-        }
-    }
+            if not outage:
+                return JsonResponse({"status": "no_active_outage"})
 
-    headers = {
-        "Content-Type": "application/json"
-    }
+            close_zendesk_ticket(
+                outage.zendesk_ticket_id,
+                alarm,
+                outage.alarm_time
+            )
 
-    response = requests.post(
-        ZENDESK_API_URL,
-        headers=headers,
-        auth=(ZENDESK_USER, ZENDESK_API_TOKEN),
-        json=payload
-    )
+            # 🔧 CHANGED: do NOT delete, mark inactive
+            outage.is_active = False
+            outage.save(update_fields=["is_active"])
 
-    print("Zendesk response:", response.status_code, response.text)
+            return JsonResponse({"status": "closed"})
+
+        return JsonResponse({"status": "ignored"})'''
+
+    except Exception:
+        print("\n🔥🔥🔥 FULL ERROR TRACEBACK 🔥🔥🔥")
+        traceback.print_exc()
+        print("🔥🔥🔥 END TRACEBACK 🔥🔥🔥\n")
+        raise

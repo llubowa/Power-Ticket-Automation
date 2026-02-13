@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "power-ticket-automation",
+  "private_key_id": "a0daea1161c7058090a48b680c35b4747ea8ebe0",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDQWwju8Kg5lBkQ\nelox4inkiqMSbhDZEMmu7KLLQuDiTgXczFJFOAXZhde043+Bj4UMqi0GKXJuc9I4\n5l/KO02oLBSdU9z/rj+DXnGQk6Y9a7bK5yFkCv5aGJXwptOv+QoNeNt8zNrCYYlB\nAJpVXKyYEMtKiIaeV8rSnE9/NfMDWpG1Wmy/YjUCZYwiU88K3WMMuXIjF/R/fJ/u\neHXUgbx7sAWZVHreCk0fH/R8OmzDAIdPOG0iK29m0LM3Ev1RbTiE7+ZDqPu4qoA7\nAw6C+3YGIG4ghQ7gO2k2SZTfsCphE/Q7kNuAgYErIFVi34kYB0fpkNdF9M5nGkty\nlCff7cfpAgMBAAECggEAA4O9m1Y46Du8zn/Z3KSNg1rpVErCAv9a/5XjSx12MKsT\nQz25F4zR4HD3CgiaYoOawXNvbf6t/Pn8LlSIgh9M+IzBzkOXY0K7tIoXzVIISFn0\nS+jpMchTsQ5gHR6bTIkdZ8vFnA3SlNvTVmLdt5noGWqTG09BQhOGCtZzKtisoD5T\njoPa1xxrqumylcXXD0zJCJmau2mp76Utca0bTihXaMFshxO2f9NdTvwbkWYXsSCs\nIIgeDIZgiv+ZxtOgEBClIp8xbJAeE7IxlQLE5+elfGLimKGi6D74UV27MD6aMqvN\n+0GTU06zAAPBa+9S4hkVxLeXMGLHo0mI3j+8MqUdhwKBgQD3YCzlyD/5yqiqzYKD\nVEtEZx6E9yQwFla6YwuLaTvYuTh91NCf/2ZqjMm1pftiVV/yfmdZj1Q7zOcZYMcC\nCNBZcRdadmhCog8RJy/EYLSVzAM5wgvSCEPKuxSo0R5TywOBGzq9SXNbkWD9mr+9\nKJyOnzm67mNp0CnZ0kStjndwKwKBgQDXnpsX0egK+VxumHQDFW8w96oiFNHC8yMY\n3wKhLpFdqJHdGcrt2XYed5wqzf0FvvCHkahNM5Ei11xlSaQejc3NTPeueldiaKLH\nmvsF5XpPQckmH6oXAl92ktDBdClMRqKmhUmYKdmgDSAnVvIakjexlCC2sEQotp/S\nW0dinC/KOwKBgQCNpjWvUg5II6KXQ1xjhSYgQgf4zWecXX5F9icLKjQJsm3Fp9Ha\nfC2R/5IVALlEomxxd64IW4k5QOhn4MGzyYY8YQSlWT30QcXs5Yp1oYZmbE7AiPup\nxe/Dq4J19GCwTIRyLjxhXSjAGyv1q+H1F8cl58jv4EdutLLyNnP7CaQcxwKBgCzK\nZ9Fk610MO+VFiiPx2e1EJXV6+bATreDGwtcUw2G/WL2jVAJgwCbIFgrWS49cAL9I\nxLt00Nt5/VmVGKC4OF5DdNgr1ec9cUMhsK+i4euA8PYYcc7h0U7iZLcrGEEeEz+g\nRI91ch3LXDiP2S8n3KXo7XrF1wLWHREnoQadB1htAoGASqm34CRx95ijxnlA+eXL\nzMuu94Or6Y+tTMaQuA4ZxB1yca8rf95/K7h/OxKIt/wWsq1N2KtY6vsiHmipf7Kl\nxF1Fdl3TCEWDBru/jnBEDpbs21f8BqYPV9JLkuOeQur2ZHZ8mxqG26O4+n6cP6hc\nl1macErjR1rFmnK5N7SPMsk=\n-----END PRIVATE KEY-----\n",
+  "client_email": "power-ticket-automation@power-ticket-automation.iam.gserviceaccount.com",
+  "client_id": "107929572996040896844",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/power-ticket-automation%40power-ticket-automation.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}

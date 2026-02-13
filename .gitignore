@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+venv/
+env/
+.venv/
+
+# Environment variables (VERY IMPORTANT)
+.env
+
+# Django stuff
+*.log
+db.sqlite3
+media/
+staticfiles/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Migrations (optional — see note below)
+# */migrations/*
+# !*/migrations/__init__.py
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+venv/
+env/
+.venv/
+
+# Environment variables (VERY IMPORTANT)
+.env
+
+# Django stuff
+*.log
+db.sqlite3
+media/
+staticfiles/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Migrations (optional — see note below)
+# */migrations/*
+# !*/migrations/__init__.py
