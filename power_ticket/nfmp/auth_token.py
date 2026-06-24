@@ -1,3 +1,4 @@
+'''
 import os
 import json
 import requests
@@ -25,3 +26,4 @@ resp.raise_for_status()
 
 # Keep response format identical to Postman: print raw JSON text
 print(resp.text)
+'''

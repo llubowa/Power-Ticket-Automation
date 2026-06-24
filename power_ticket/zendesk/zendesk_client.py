@@ -22,37 +22,9 @@ BRAND_ID = int(os.getenv("ZENDESK_BRAND_ID"))
 
 
 
-# ==========================
-# Zendesk HTML Signature
-# ==========================
-SIGNATURE_HTML = """
-<hr>
-<table style="font-family:Arial, sans-serif; font-size:13px;">
-<tr>
-    <td style="padding-right:10px; vertical-align:top;">
-        <img src="https://upload.wikimedia.org/wikipedia/commons/5/5f/C_Squared_logo.png"
-             width="90" alt="CSquared">
-    </td>
-    <td>
-        <strong>CSquared Network Operations Team</strong><br>
-        Unit B3, Plot 7/11, Buganda Road, Kampala, Uganda<br>
-        Email: <a href="mailto:support-ug@csquared.com">support-ug@csquared.com</a><br>
-        Tel: +256312180500 | Toll Free: +256800280500<br>
-        <em>'FibeRising' Africa for affordable broadband internet connectivity.</em>
-    </td>
-</tr>
-</table>
-
-<p style="font-size:10px;color:#666;">
-If you received this communication by mistake, please do not forward it.
-It may contain confidential or privileged information. Please erase all
-copies and notify the sender.
-</p>
-"""
 
 
-
-# ⭐ GOLD STANDARD timestamp parser
+# GOLD STANDARD timestamp parser
 def parse_alarm_timestamp(alarm):
     alarm_ts = alarm["lastTimeDetected"] / 1000
     # Create UTC aware datetime
@@ -77,9 +49,39 @@ def db_site_name(nfmp_site_name):
 
     return site.Site_name_master_db if site else None
 
+# ==========================
+# Zendesk HTML Signature
+# ==========================
+SIGNATURE_HTML = """
+    <hr>
+    <table style="font-family:Arial, sans-serif; font-size:13px;">
+    <tr>
+        <td style="padding-right:10px; vertical-align:top; text-align:center;">
+        <img src="https://csquared.com/wp-content/uploads/2024/02/cropped-favicon-192x192.png"
+            width="90"
+            alt="CSquared"
+            style="display:block; margin:0 auto;">
+        <br>
+        <strong style="display:block;">C Squared</strong>
+        </td>
+        <td>
+            CSquared Network Operations Team<br>
+            Unit B3, Plot 7/11, Buganda Road, Kampala, Uganda<br>
+            Email: <a href="mailto:support-ug@csquared.com">support-ug@csquared.com</a><br>
+            <strong>Tel: +256312180500 | Toll Free: +256800280500</strong><br>
+            <em><strong>'FibeRising' Africa for affordable broadband internet connectivity.</strong></em>
+        </td>
+    </tr>
+    </table>
+
+    <p style="font-family:Arial, sans-serif; font-size:13px;">
+    If you received this communication by mistake, please do not forward it.
+    It may contain confidential or privileged information. Please erase all
+    copies and notify the sender.
+    </p>
+    """
 
 # ================= CREATE =================
-
 def create_zendesk_ticket(alarm, customer_emails):
 
     if not customer_emails:
@@ -95,34 +97,38 @@ def create_zendesk_ticket(alarm, customer_emails):
     fault_date = alarm_dt.strftime("%Y-%m-%d")
     fault_time = alarm_dt.strftime("%H:%M")
 
-    body = (
-              f"Dear Valued Customer,\n\n"
-              f"Ticket Status: Open\n\n"
-              f"Name of NE/Circuit/Link affected: {alarm['objectFullName']}\n\n"
-              f"Date and Time Reported: {alarm_dt.strftime("%Y-%m-%d %H:%M")} hrs\n\n"
-              f"Client Services Affected: Yes\n\n"
-              f"Fault Priority: {alarm['severity']}\n\n"
-              f"Description: Site is not reachable. \n\n"
-              f"Kindly restore power at site and revert.\n\n"
-              f"Kind Regards,\n\n\n"
-           )
+    # Switched to HTML line breaks for better compatibility with html_body
+    body_html = (
+        f"Dear Valued Customer,<br><br>"
+        f"Ticket Status: Open<br><br>"
+        f"Name of NE/Circuit/Link affected: {alarm['objectFullName']}<br><br>"
+        f"Date and Time Reported: {alarm_dt.strftime('%Y-%m-%d %H:%M')} hrs<br><br>"
+        f"Client Services Affected: Yes<br><br>"
+        f"Fault Priority: {alarm['severity']}<br><br>"
+        f"Description: Site is not reachable.<br><br>"
+        f"Kindly restore power at site and revert.<br><br>"
+        f"Kind Regards,<br>"
+    )
 
-        comment_body = f"""
-        <pre style="font-family:Arial, sans-serif; font-size:14px;">
-        {body_text}
-        </pre>
-        {SIGNATURE_HTML}
-        """
-           
+    # Combine the email body and the signature
+    full_comment_html = f"""
+    <div style="font-family:Arial, sans-serif; font-size:14px;">
+        {body_html}
+    </div>
+    {SIGNATURE_HTML}
+    """
 
     ticket = Ticket(
         subject=f"Outage at site: {alarm['objectFullName']}",
         requester=requester,
         collaborators=collaborators,
-        description=body,
         priority="urgent",
         type="incident",
         brand=brand,
+        comment={                 
+            "html_body": full_comment_html,
+            "public": True
+        },
         custom_fields=[
             {"id": 360027172557, "value": "cleo-technical_ops-power-outage-customer"},
             {"id": 1900001737793, "value": fault_date},
@@ -132,6 +138,7 @@ def create_zendesk_ticket(alarm, customer_emails):
 
     created_ticket = client.tickets.create(ticket)
 
+    # Zenpy usually returns the object directly; handle response safely
     ticket_id = getattr(getattr(created_ticket, 'ticket', None), 'id', None)
 
     if not ticket_id:
@@ -142,23 +149,18 @@ def create_zendesk_ticket(alarm, customer_emails):
 
 # ================= CLOSE =================
 
-
-
 def close_zendesk_ticket(ticket_id, alarm, fault_occurance_time):
     """
-    Attempts to close a Zendesk ticket.
-    Returns True if ticket was successfully closed, False otherwise.
+    Attempts to close a Zendesk ticket with an HTML signature.
     """
-
     if not ticket_id:
-        return False  # Never crash alarm pipelines
+        return False
 
     alarm_dt = parse_alarm_timestamp(alarm)
     fault_local = dj_timezone.localtime(fault_occurance_time)
 
-    # ⭐ Ignore stale clears instead of crashing
     if alarm_dt <= fault_occurance_time:
-        print("⚠️ Ignoring stale clear alarm")
+        #print("⚠️ Ignoring stale clear alarm")
         return False
 
     try:
@@ -169,23 +171,35 @@ def close_zendesk_ticket(ticket_id, alarm, fault_occurance_time):
         restoration_date = alarm_dt.strftime("%Y-%m-%d")
         restoration_time = alarm_dt.strftime("%H:%M")
 
-        body = (
-                  f"Dear Valued Customer,\n\n"
-                  f"Ticket status: Closed\n\n"
-                  f"Name of NE/Circuit/Link: {nfmp_name}\n\n"
-                  f"Date and Time Reported: {fault_local.strftime("%Y-%m-%d %H:%M")} hrs\n\n"
-                  f"Date and Time Cleared: {alarm_dt.strftime("%Y-%m-%d %H:%M")} hrs\n\n"
-                  f"Client Services Affected (Yes/No): Yes.\n\n"
-                  f"Fault Priority: Critical.\n\n"
-                  f"Reason for Outage: Power Outage at Site.\n\n"
-                  f"Fault Resolution: Power restored at Site to restore service.\n\n"
-                  f"Kind regards,\n\n\n"
-              )
+        # Re-formatted as HTML to support the signature layout
+        body_html = (
+            f"Dear Valued Customer,<br><br>"
+            f"Ticket status: Closed<br><br>"
+            f"Name of NE/Circuit/Link: {nfmp_name}<br><br>"
+            f"Date and Time Reported: {fault_local.strftime('%Y-%m-%d %H:%M')} hrs<br><br>"
+            f"Date and Time Cleared: {alarm_dt.strftime('%Y-%m-%d %H:%M')} hrs<br><br>"
+            f"Client Services Affected (Yes/No): Yes.<br><br>"
+            f"Fault Priority: Critical.<br><br>"
+            f"Reason for Outage: Power Outage at Site.<br><br>"
+            f"Fault Resolution: Power restored at Site to restore service.<br><br>"
+            f"Kind regards,<br>"
+        )
+
+        # Wrap everything in a div for consistent font styling
+        full_comment_html = f"""
+        <div style="font-family:Arial, sans-serif; font-size:14px;">
+            {body_html}
+        </div>
+        {SIGNATURE_HTML}
+        """
 
         ticket = Ticket(
             id=int(ticket_id),
-            status="solved",
-            comment={"body": body, "public": True},
+            status="solved",  # Zendesk practice: Solved status before automated Closure
+            comment={
+                "html_body": full_comment_html,
+                "public": True
+            },
             custom_fields=[
                 {"id": 1900001930773, "value": restoration_date},
                 {"id": 360025570617, "value": restoration_time},
@@ -202,7 +216,7 @@ def close_zendesk_ticket(ticket_id, alarm, fault_occurance_time):
         )
 
         client.tickets.update(ticket)
-        print(f"✅ Ticket {ticket_id} closed")
+        #print(f"✅ Ticket {ticket_id} closed")
         return True
 
     except Exception as e:
@@ -210,3 +224,67 @@ def close_zendesk_ticket(ticket_id, alarm, fault_occurance_time):
         return False
 
 
+def close_CSQ_power_ticket(ticket_id, alarm, fault_occurance_time):
+    """
+    Attempts to close a Zendesk ticket with an HTML signature.
+    """
+    if not ticket_id:
+        return False
+
+    alarm_dt = parse_alarm_timestamp(alarm)
+    fault_local = dj_timezone.localtime(fault_occurance_time)
+
+    if alarm_dt <= fault_occurance_time:
+        #print("⚠️ Ignoring stale clear alarm")
+        return False
+
+    try:
+        nfmp_name = alarm['objectFullName']
+        db_name = db_site_name(nfmp_name)
+        site_id = find_site_id(db_name) if db_name else None
+
+        restoration_date = alarm_dt.strftime("%Y-%m-%d")
+        restoration_time = alarm_dt.strftime("%H:%M")
+
+        # Re-formatted as HTML to support the signature layout
+        body_html = (
+            f"Dear Valued Customer,<br><br>"
+            f"Ticket status: Closed<br><br>"
+            f"Name of NE/Circuit/Link: {nfmp_name}<br><br>"
+            f"Date and Time Reported: {fault_local.strftime('%Y-%m-%d %H:%M')} hrs<br><br>"
+            f"Date and Time Cleared: {alarm_dt.strftime('%Y-%m-%d %H:%M')} hrs<br><br>"
+            f"Client Services Affected (Yes/No): Yes.<br><br>"
+            f"Fault Priority: Critical.<br><br>"
+            f"Reason for Outage: Power Outage at Site.<br><br>"
+            f"Fault Resolution: Power restored at Site to restore service.<br><br>"
+            f"Kind regards,<br>"
+        )
+
+        # Wrap everything in a div for consistent font styling
+        full_comment_html = f"""
+        <div style="font-family:Arial, sans-serif; font-size:14px;">
+            {body_html}
+        </div>
+        {SIGNATURE_HTML}
+        """
+
+        ticket = Ticket(
+            id=int(ticket_id),
+            status="solved",  # Zendesk practice: Solved status before automated Closure
+            comment={
+                "html_body": full_comment_html,  # ✅ Switched to html_body
+                "public": True
+            },
+            custom_fields=[
+                {"id": 1900001930773, "value": restoration_date},
+                {"id": 360025570617, "value": restoration_time}
+            ]
+        )
+
+        client.tickets.update(ticket)
+        #print(f"✅ Ticket {ticket_id} closed")
+        return True
+
+    except Exception as e:
+        print(f"❌ Failed to close ticket {ticket_id}: {e}")
+        return False

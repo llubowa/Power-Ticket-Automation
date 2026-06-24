@@ -3,89 +3,136 @@ from dotenv import load_dotenv
 from requests.auth import HTTPBasicAuth
 from collections import defaultdict
 import time
+from requests.exceptions import RequestException
 
 TIME_THRESHOLD = 300000   # 5 minutes in milliseconds
 
 load_dotenv(override=True)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-NSP = os.environ["NSP_HOST"].strip()
+
+# ==========================================================
+# LOAD ENV VARIABLES
+# ==========================================================
+NSP_HOSTS = [
+    host.strip()
+    for host in os.getenv("NSP_HOSTS", "").split(",")
+    if host.strip()
+]
+
+if not NSP_HOSTS:
+    raise Exception("NSP_HOSTS not configured in .env")
+
 CID = os.environ["NSP_CLIENT_ID"].strip()
 SEC = os.environ["NSP_CLIENT_SECRET"].strip()
 
+DJANGO_ALARM_URL = "http://127.0.0.1:8000/power_ticket/webhook/"
+
+# ==========================================================
+# CENTRAL FAILOVER REQUEST FUNCTION
+# ==========================================================
+def nsp_request(method, path, token=None, params=None, data=None, auth=None):
+
+    headers = {"Content-Type": "application/json"}
+
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    for host in NSP_HOSTS:
+        url = f"https://{host}{path}"
+
+        try:
+            r = requests.request(
+                method=method,
+                url=url,
+                headers=headers,
+                params=params,
+                data=data,
+                auth=auth,
+                timeout=60,
+                verify=False
+            )
+
+            if r.ok:
+                #print(f"✅ Connected to NSP {host}")
+                return r
+            else:
+                print(f"⚠ {host} returned {r.status_code}")
+
+        except Exception as e:
+            print(f"❌ {host} failed: {e}")
+
+    raise Exception("All NSP hosts unreachable")
+
+
+# ==========================================================
+# TOKEN WITH FAILOVER
+# ==========================================================
 def get_token():
-    url = f"https://{NSP}/rest-gateway/rest/api/v1/auth/token"
-    r = requests.post(
-        url, json={"grant_type":"client_credentials"},
-        auth=HTTPBasicAuth(CID, SEC),
-        timeout=30, verify=False
+
+    path = "/rest-gateway/rest/api/v1/auth/token"
+
+    for host in NSP_HOSTS:
+        try:
+            url = f"https://{host}{path}"
+
+            r = requests.post(
+                url,
+                data={"grant_type": "client_credentials"},
+                auth=HTTPBasicAuth(CID, SEC),
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=30,
+                verify=False
+            )
+
+            r.raise_for_status()
+            print(f"🔐 Token acquired from {host}")
+            return r.json().get("access_token")
+
+        except Exception as e:
+            print(f"❌ Token failed on {host}: {e}")
+
+    raise Exception("Failed to acquire token from all NSP hosts")
+
+
+# ==========================================================
+# API FUNCTIONS (NOW USING FAILOVER)
+# ==========================================================
+def get_alarms_v2(token, filter_str):
+
+    r = nsp_request(
+        "GET",
+        "/FaultManagement/rest/api/v2/alarms/details",
+        token=token,
+        params={"alarmFilter": filter_str}
     )
-    #print("\n== Raw token response =="); print(r.text)
-    r.raise_for_status()
-    tok = r.json().get("access_token")
-    if not tok: raise SystemExit("No access_token in response")
-    #print("\n== Access token (sensitive) =="); print(tok)
-    return tok
 
-FM_BASE = os.getenv("FM_BASE", f"https://{NSP}").strip()
-DJANGO_ALARM_URL = "http://127.0.0.1:8000/power_ticket/webhook/"   # server IP
-ALARMS_URL = f"{FM_BASE}/FaultManagement/rest/api/v2/alarms/details/?alarmFilter=alarmName%2520like%2520'%2525Reachability%2525'"
+    return r.json().get("response", {}).get("data", [])
 
-
-def get_alarms_v2(token, fm_base, filter_str):
-    url = f"{fm_base}/FaultManagement/rest/api/v2/alarms/details"
-
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
-
-    params = {"alarmFilter": filter_str}
-
-    r = requests.get(url, headers=headers, params=params, timeout=60, verify=False)
-
-    if not r.ok:
-        print(f"\nHTTP {r.status_code}:\n{r.text}")
-        r.raise_for_status()
-
-    js = r.json()
-
-    # Extract alarm dictionaries safely
-    return js.get("response", {}).get("data", [])
 
 def correlate_dyinggasp_linkdown(alarms):
-    """
-    Returns correlated alarms where:
-    - Same NE
-    - Same Port
-    - LinkDown occurs within 5 minutes of DyingGasp
-    """
 
     grouped = defaultdict(lambda: {"dying": [], "linkdown": []})
 
-    # Group alarms
     for alarm in alarms:
-
         ne = alarm.get("neName")
         port = alarm.get("affectedObjectName")
         name = alarm.get("alarmName")
-        time = alarm.get("lastTimeDetected")
+        time_detected = alarm.get("lastTimeDetected")
 
-        if not ne or not port or not time:
+        if not ne or not port or not time_detected:
             continue
 
         key = (ne, port)
 
         if name == "DyingGaspSignal":
-            grouped[key]["dying"].append(time)
+            grouped[key]["dying"].append(time_detected)
 
         elif name == "LinkDown":
-            grouped[key]["linkdown"].append(time)
+            grouped[key]["linkdown"].append(time_detected)
 
-    # Correlate
     matches = []
 
     for (ne, port), data in grouped.items():
-
         for dying_time in data["dying"]:
             for link_time in data["linkdown"]:
 
@@ -96,92 +143,64 @@ def correlate_dyinggasp_linkdown(alarms):
                         "dying_time": dying_time,
                         "linkdown_time": link_time
                     })
-                    break   # stop after first match
+                    break
 
     return matches
 
-def get_physical_link(token, fm_base, ne_name, port):
 
-    url = f"{fm_base}/NetworkSupervision/rest/api/v1/physicalLinks"
+def get_physical_link(token, ne_name, port):
 
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
-
-    # Convert "Port 1/1/1" -> "1/1/1"
     port_id = port.replace("Port ", "").strip()
-
     filter_str = f"name like '%{ne_name}:{port_id}%'"
 
-    params = {"filter": filter_str}
+    r = nsp_request(
+        "GET",
+        "/NetworkSupervision/rest/api/v1/physicalLinks",
+        token=token,
+        params={"filter": filter_str}
+    )
 
-    r = requests.get(url, headers=headers, params=params, timeout=60, verify=False)
-
-    if not r.ok:
-        #print(f"\nHTTP {r.status_code}:\n{r.text}")
-        r.raise_for_status()
-
-    js = r.json()
-
-    # ✅ Correct parsing
-    links = js.get("response", {}).get("data", [])
+    links = r.json().get("response", {}).get("data", [])
 
     if not links:
         return None
 
-    # Return link names
     return [link.get("name") for link in links]
 
+
 def get_peer_site(link_name, current_ne):
-    """
-    Extract the peer NE from a physical link string.
-    """
 
     if not link_name:
         return None
 
-    # If list was returned
     if isinstance(link_name, list):
         link_name = link_name[0]
 
     try:
         left, right = link_name.split("--")
-
         left_ne = left.split(":")[0]
         right_ne = right.split(":")[0]
-
         return right_ne if left_ne == current_ne else left_ne
-
     except Exception:
         return None
 
-def get_reachability_alarm(token, fm_base, ne_name):
 
-    url = f"{fm_base}/FaultManagement/rest/api/v2/alarms/details"
-
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
+def get_reachability_alarm(token, ne_name):
 
     filter_str = f"alarmName like '%25Reachability%25' and neName ='{ne_name}'"
 
-
-    params = {"alarmFilter": filter_str}
-
-    r = requests.get(url, headers=headers, params=params, timeout=60, verify=False)
-
-    if not r.ok:
-        #print(f"\nHTTP {r.status_code}:\n{r.text}")
-        r.raise_for_status()
+    r = nsp_request(
+        "GET",
+        "/FaultManagement/rest/api/v2/alarms/details",
+        token=token,
+        params={"alarmFilter": filter_str}
+    )
 
     alarms = r.json().get("response", {}).get("data", [])
 
     if not alarms:
         return None
 
-    # Return only fields you care about
     extracted = []
 
     for alarm in alarms:
@@ -193,112 +212,181 @@ def get_reachability_alarm(token, fm_base, ne_name):
 
     return extracted
 
+def pf_site_name(token,nename,port):
+    filter_str = (
+        "neName like '%25{nename}%25' and name like '{port}'"
+    )
+    r = nsp_request(
+        "GET",
+        "/NetworkSupervision/rest/api/v1/ports",
+        token=token,
+        params={"alarmFilter": filter_str}
+    )
+    alarms = r.json().get("response", {}).get("data", [])
+
+    if not alarms:
+        return None
+    site_name = alarms.get("description")
+    return site_name
+    
+
+def sasm_cascased_linkdown_alarms(token):
+
+    filter_str = (
+        "alarmName like '%25LinkDown%25' "
+        "and (neName like '%25SAS-M%25' or neName like '%25cascaded%25')"
+    )
+
+    r = nsp_request(
+        "GET",
+        "/FaultManagement/rest/api/v2/alarms/details",
+        token=token,
+        params={"alarmFilter": filter_str}
+    )
+
+    alarms = r.json().get("response", {}).get("data", [])
+
+    if not alarms:
+        return None
+
+    extracted = []
+
+    for alarm in alarms:
+
+        ne_name = alarm.get("neName", "")
+        port_raw = alarm.get("affectedObjectName", "")
+        last_time = alarm.get("lastTimeDetected")
+
+        if not ne_name or not port_raw:
+            continue
+
+        # ==============================
+        # CASCADED FILTERING LOGIC
+        # ==============================
+        if "cascaded" in ne_name.lower():
+
+            # Extract port number using regex (handles -ddm, :xxx, etc)
+            match = re.search(r"1/1/(\d+)", port_raw)
+
+            if not match:
+                continue
+
+            port_number = int(match.group(1))
+
+            # Only allow ports 1 to 6
+            if port_number < 1 or port_number > 6:
+                continue
+
+        # SAS-M → no port restriction
+        site = pf_site_name(token,ne_name,port_raw)
+        extracted.append({
+            "neName": ne_name,
+            "port": port_raw,
+            "lastTimeDetected": last_time,
+            "Name":site
+        })
+
+
+    return extracted
+
+
+
 def push_alarm_to_django(alarm):
-    """Send one alarm to Django webhook"""
+
     try:
-        r = requests.post(
+        requests.post(
             DJANGO_ALARM_URL,
             headers={"Content-Type": "application/json"},
             data=json.dumps(alarm),
             timeout=10
         )
-        #print("Pushed alarm → Django:", r.status_code, r.text)
     except Exception as e:
         print("Error sending alarm:", e)
 
-def extract_customer(name: str) -> str:
-    """
-    Extracts provider name from different naming formats.
-    
-    Handles:
-    - UG-KLA-iWay_KampalaHospital → iWay
-    - Simbanet-SGA Ntinda → Simbanet
-    - UG-KLA-Datanet-TexolNamasuba → Datanet
-    """
 
-    # 1. If input contains a region prefix (UG-KLA-...), remove it
+# ==========================================================
+# YOUR ORIGINAL BUSINESS LOGIC (UNCHANGED)
+# ==========================================================
+def extract_customer(name: str) -> str:
+
     if name.startswith("UG-"):
-        # Remove first three segments e.g. UG-KLA-iWay_ → take 3rd segment as provider
         parts = name.split("-")
-        # Ensure enough parts
         if len(parts) >= 3:
-            # The provider is the third segment (may contain underscores)
             provider_segment = parts[2]
-            # Provider ends before first underscore
             return provider_segment.split("_")[0]
 
-    # 2. Format like "Simbanet-SGA Ntinda" → provider is first part before hyphen
     if "-" in name:
         return name.split("-")[0]
 
-    # 3. Fallback: return first token
     return name.split("_")[0].split(" ")[0]
 
+
 def customer_id(name: str) -> str:
+
     name = name.lower().strip()
 
     provider_map = {
         "intsol": 21,
-        "csq":1,
+        "csq": 1,
         "intsolagencybankingmuyengahq": 21,
         "is": 21,
         "iway": 7,
         "echotel": 7,
         "liquid": 31,
         "liquidtelecom": 31,
-        "sprint":27,
-        "simbanet":5,
-        "roke":2,
-        "bcc":24,
-        "bluecrane":24,
-        "gilat":12,
-        "renu":10,
-        "seacom":19
-
+        "sprint": 27,
+        "simbanet": 5,
+        "roke": 2,
+        "bcc": 24,
+        "bluecrane": 24,
+        "gilat": 12,
+        "giat": 12,
+        "renu": 10,
+        "seacom": 19,
+        "sombha": 16,
+        "datanet": 29,
+        "savanna": 3
     }
 
-    # Look for direct matches
     if name in provider_map:
         return provider_map[name]
 
-    # If the name contains a provider keyword (more flexible)
     for key, value in provider_map.items():
         if key in name:
             return value
 
-    # If nothing matches, return the raw name
     return name
 
+
 def run_alarm_job():
+
     token = get_token()
-    filter_str = "alarmName in ('DyingGaspSignal','LinkDown')"
-    alarms = get_alarms_v2(token, FM_BASE, filter_str)
+
+    # OPEN logic
+    #filter_str = "alarmName in ('DyingGaspSignal','LinkDown')"
+    filter_str = (
+    "(alarmName = 'DyingGaspSignal' "
+    "or alarmName = 'LinkDown')"
+    )
+    alarms = get_alarms_v2(token, filter_str)
     matches = correlate_dyinggasp_linkdown(alarms)
+
     seen_sites = set()
+
     for match in matches:
 
-        link = get_physical_link(
-            token,
-            FM_BASE,
-            match["neName"],
-            match["port"]
-        )
-
+        link = get_physical_link(token, match["neName"], match["port"])
         peer_site = get_peer_site(link, match["neName"])
 
-        if not peer_site:
-            continue
-
-        if peer_site in seen_sites:
+        if not peer_site or peer_site in seen_sites:
             continue
 
         seen_sites.add(peer_site)
 
-        reachability = get_reachability_alarm(
-            token,
-            FM_BASE,
-            peer_site
-        )
+        reachability = get_reachability_alarm(token, peer_site)
+
+        if not reachability:
+            continue
 
         objectFullName = reachability[0]["neName"]
         customer = extract_customer(objectFullName)
@@ -309,24 +397,34 @@ def run_alarm_job():
             "objectFullName": objectFullName,
             "severity": "Critical",
             "lastTimeDetected": reachability[0]["lastTimeDetected"],
-            "action": "OPEN" 
+            "action": "OPEN"
         }
 
         push_alarm_to_django(alarm_payload)
 
+    # CLOSE logic
     filter_str_reboot = "alarmName in ('NodeRebooted')"
-    reboot_alarms = get_alarms_v2(token, FM_BASE, filter_str_reboot)
-    
+    reboot_alarms = get_alarms_v2(token, filter_str_reboot)
+
     for alarm in reboot_alarms:
-        
+
         objectFullName = alarm["neName"]
+        customer = extract_customer(objectFullName)
+        id = customer_id(customer)
+
         payload = {
+            "customer_id": id,
             "objectFullName": objectFullName,
             "severity": "Critical",
             "lastTimeDetected": alarm["lastTimeDetected"],
             "action": "CLOSE"
         }
-        push_alarm_to_django(payload)
-        #print("Pushed NodeReboot alarm to Django")
 
+        push_alarm_to_django(payload)
+    #sasm = sasm_cascased_linkdown_alarms(token)
+    #print(sasm)    
+
+
+if __name__ == "__main__":
+    run_alarm_job()
 

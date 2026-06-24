@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models import Q
 
 # Create your models here.
 
@@ -27,19 +28,23 @@ class CustomerEmail(models.Model):
         return f"{self.email} ({self.customer.customer_name})"
 
 class SiteOutage(models.Model):
-    site_name = models.CharField(max_length=255)
+    site_name = models.CharField(max_length=255, db_index=True)
     alarm_time = models.DateTimeField()
     notification_sent = models.BooleanField(default=False)
-    is_active = models.BooleanField(default=True)  # site currently down
+    is_active = models.BooleanField(default=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     zendesk_ticket_id = models.BigIntegerField(null=True, blank=True)
 
     class Meta:
+        indexes = [
+            models.Index(fields=["site_name", "is_active"]),
+        ]
+
         constraints = [
             models.UniqueConstraint(
-                fields=["site_name", "is_active"],
-                condition=models.Q(is_active=True),
+                fields=["site_name"],
+                condition=Q(is_active=True),
                 name="unique_active_site_outage"
             )
         ]
