@@ -58,3 +58,7 @@ Thumbs.db
 # Migrations (optional — see note below)
 # */migrations/*
 # !*/migrations/__init__.py
+
+# PostgreSQL configuration (if stored locally)
+postgres_data/
+pgdata/
